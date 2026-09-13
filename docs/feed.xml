@@ -6,7 +6,7 @@
     <atom:link href="https://martin-milbradt.github.io/zvi-summaries/feed.xml" rel="self" type="application/rss+xml"/>
     <description>LLM-generated four-paragraph summaries of Zvi Mowshowitz's blog posts.</description>
     <language>en</language>
-    <lastBuildDate>Sat, 12 Sep 2026 20:11:57 +0000</lastBuildDate>
+    <lastBuildDate>Sun, 13 Sep 2026 03:12:33 +0000</lastBuildDate>
     <item>
       <title>GPT-6-Astra Can Do Ambitious Things</title>
       <link>https://thezvi.wordpress.com/2026/09/12/gpt-6-astra-can-do-ambitious-things/</link>
