@@ -1,4 +1,71 @@
-from zvi_summaries.fetch import strip_html
+from unittest.mock import patch
+
+from blog_summaries.fetch import SubstackArchive, fetch_articles, strip_html
+
+RSS_WITH_AUDIO = """\
+<?xml version="1.0"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<channel><title>Feed</title>
+<item>
+  <title>Episode</title><link>https://example.com/p/episode</link>
+  <guid isPermaLink="false">https://example.com/p/episode</guid>
+  <dc:creator>Host</dc:creator>
+  <enclosure url="https://example.com/episode.mp3" length="1" type="audio/mpeg"/>
+  <description><![CDATA[<p>Show notes.</p>]]></description>
+</item>
+<item>
+  <title>Essay</title><link>https://example.com/p/essay</link>
+  <guid isPermaLink="false">https://example.com/p/essay</guid>
+  <enclosure url="https://example.com/cover.png" length="1" type="image/png"/>
+  <description><![CDATA[<p>Body.</p>]]></description>
+</item>
+</channel></rss>
+"""
+
+
+def test_fetch_articles_marks_audio_enclosures_and_fills_missing_author() -> None:
+    episode, essay = fetch_articles(RSS_WITH_AUDIO, "Fallback Author")
+    assert (episode.title, episode.audio, episode.author) == ("Episode", True, "Host")
+    assert (essay.audio, essay.author) == (False, "Fallback Author")
+
+
+def test_substack_archive_fetches_bodies_except_for_podcasts() -> None:
+    listing = [
+        {
+            "slug": "essay",
+            "title": "Essay",
+            "type": "newsletter",
+            "canonical_url": "https://example.com/p/essay",
+            "post_date": "2026-09-11T17:12:25.000Z",
+            "publishedBylines": [{"name": "A"}, {"name": "B"}],
+        },
+        {
+            "slug": "episode",
+            "title": "Episode",
+            "type": "podcast",
+            "canonical_url": "https://example.com/p/episode",
+            "post_date": "2026-09-10T00:00:00.000Z",
+            "publishedBylines": [],
+        },
+    ]
+
+    def fake_fetch_json(url: str) -> object:
+        if url.endswith("/api/v1/posts/essay"):
+            return {"body_html": "<p>Body.</p>"}
+        assert "/api/v1/archive?sort=new&offset=20&limit=20" in url
+        return listing
+
+    with patch("blog_summaries.fetch.fetch_json", side_effect=fake_fetch_json) as fetch:
+        essay, episode = SubstackArchive("https://example.com").fetch_page(2, "Blog")
+
+    assert fetch.call_count == 2
+    assert (essay.guid, essay.author, essay.content_html) == (
+        "https://example.com/p/essay",
+        "A, B",
+        "<p>Body.</p>",
+    )
+    assert essay.pub_date.isoformat() == "2026-09-11T17:12:25+00:00"
+    assert (episode.audio, episode.author, episode.content_html) == (True, "Blog", "")
 
 
 def test_strip_html_basic() -> None:
@@ -107,4 +174,4 @@ def test_strip_html_replaces_figures_with_placeholder() -> None:
 
 
 def test_strip_html_drops_zero_width_spaces() -> None:
-    assert strip_html("<p>A\u200bB</p>") == "AB"
+    assert strip_html("<p>A​B</p>") == "AB"

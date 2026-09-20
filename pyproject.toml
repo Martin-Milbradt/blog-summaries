@@ -1,7 +1,7 @@
 [project]
-name = "zvi-summaries"
-version = "0.1.0"
-description = "RSS feed of LLM summaries of Zvi Mowshowitz's blog"
+name = "blog-summaries"
+version = "0.2.0"
+description = "RSS feeds of LLM summaries of blogs"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -26,7 +26,7 @@ dev = [
 ]
 
 [project.scripts]
-zvi-summaries = "zvi_summaries.main:main"
+blog-summaries = "blog_summaries.main:main"
 
 [tool.ruff.lint]
 extend-select = ["I", "UP"]

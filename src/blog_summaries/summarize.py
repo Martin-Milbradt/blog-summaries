@@ -46,13 +46,14 @@ def configured_knowledge_cutoff() -> str:
 
 
 SYSTEM_PROMPT_TEMPLATE = """\
-You summarize blog posts by Zvi Mowshowitz.
+You summarize {subject}.
 Write exactly four paragraphs of plain prose: no bullet points, headers, or editorializing beyond what the author wrote.
 Your knowledge cutoff is {knowledge_cutoff} and today is {today}; the article may cover events after your cutoff, so trust its account over your priors."""
 
 
-def system_prompt() -> str:
+def system_prompt(subject: str) -> str:
     return SYSTEM_PROMPT_TEMPLATE.format(
+        subject=subject,
         knowledge_cutoff=configured_knowledge_cutoff(),
         today=datetime.date.today().isoformat(),
     )
@@ -89,11 +90,7 @@ def serialize_messages(
     return [{"role": m.role, "content": m.content} for m in messages]
 
 
-def post_chat(
-    messages: collections.abc.Sequence[ChatMessage],
-    model: str | None = None,
-) -> str:
-    model = model or configured_model()
+def post_chat(messages: collections.abc.Sequence[ChatMessage], model: str) -> str:
     api_key = environment_api_key()
     client = openai.OpenAI(
         base_url=OPENROUTER_BASE_URL,
@@ -127,6 +124,7 @@ def post_chat(
 def summarize_with_fallback(
     title: str,
     text: str,
+    subject: str,
     model: str,
     fallback: str | None,
 ) -> tuple[str, str]:
@@ -136,21 +134,21 @@ def summarize_with_fallback(
     if there is no usable fallback or if the fallback refuses too.
     """
     try:
-        return summarize_article(title, text, model=model), model
+        return summarize_article(title, text, subject, model), model
     except ArticleRefusedError:
         if not fallback or fallback == model:
             raise
         print(f"  refused by {model}, retrying with {fallback}")  # noqa: T201
 
-    return summarize_article(title, text, model=fallback), fallback
+    return summarize_article(title, text, subject, fallback), fallback
 
 
-def summarize_article(title: str, text: str, model: str | None = None) -> str:
+def summarize_article(title: str, text: str, subject: str, model: str) -> str:
     messages = [
-        ChatMessage(role="system", content=system_prompt()),
+        ChatMessage(role="system", content=system_prompt(subject)),
         ChatMessage(
             role="user",
             content=f"Summarize this article.\n\nTitle: {title}\n\nContent:\n{text}",
         ),
     ]
-    return post_chat(messages, model=model or configured_model())
+    return post_chat(messages, model)
