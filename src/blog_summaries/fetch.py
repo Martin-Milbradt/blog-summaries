@@ -1,20 +1,25 @@
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportMissingTypeStubs=false
 import dataclasses
 import datetime
+import http.client
+import json
 import re
 import time
-from typing import cast
+import urllib.error
+import urllib.request
+from typing import Protocol, TypedDict, cast
 
 import feedparser
 from bs4 import BeautifulSoup, Tag
 
-FEED_URL = "https://thezvi.wordpress.com/feed/"
 USER_AGENT = (
-    "Mozilla/5.0 (zvi-summaries; +https://github.com/Martin-Milbradt/zvi-summaries)"
+    "Mozilla/5.0 (blog-summaries; +https://github.com/Martin-Milbradt/blog-summaries)"
 )
 # Guard rail against a runaway feed payload, not a budget: the longest posts run
 # about 100k characters, so real articles never hit it.
 MAX_TEXT_LENGTH = 400_000
+# Substack feeds hold 20 entries, so archive page 2 starts where the feed ends.
+ARCHIVE_PAGE_SIZE = 20
 # Tags that end a paragraph: a blank line before and after.
 PARAGRAPH_TAGS = [
     "blockquote",
@@ -47,9 +52,88 @@ class Article:
     author: str
     pub_date: datetime.datetime
     content_html: str
+    audio: bool = False
+    """A podcast episode: the body is show notes, not the content."""
 
 
-def fetch_articles(url: str = FEED_URL) -> list[Article]:
+class Archive(Protocol):
+    """Posts older than the feed carries, one page at a time. Page 1 is the feed itself."""
+
+    def fetch_page(self, page: int, default_author: str) -> list[Article]: ...
+
+
+@dataclasses.dataclass(frozen=True)
+class WordPressArchive:
+    feed_url: str
+
+    def fetch_page(self, page: int, default_author: str) -> list[Article]:
+        return fetch_articles(f"{self.feed_url}?paged={page}", default_author)
+
+
+class SubstackByline(TypedDict):
+    name: str
+
+
+class SubstackPost(TypedDict):
+    slug: str
+    title: str
+    type: str
+    canonical_url: str
+    post_date: str
+    publishedBylines: list[SubstackByline]
+
+
+class SubstackPostBody(TypedDict):
+    body_html: str | None
+
+
+@dataclasses.dataclass(frozen=True)
+class SubstackArchive:
+    site_url: str
+
+    def fetch_page(self, page: int, default_author: str) -> list[Article]:
+        offset = (page - 1) * ARCHIVE_PAGE_SIZE
+        listing_url = f"{self.site_url}/api/v1/archive?sort=new&offset={offset}&limit={ARCHIVE_PAGE_SIZE}"
+        posts = cast(list[SubstackPost], fetch_json(listing_url))
+        articles: list[Article] = []
+        for post in posts:
+            audio = post["type"] == "podcast"
+            content_html = ""
+            if not audio:
+                # The archive listing carries no bodies; each post is its own request.
+                body = cast(
+                    SubstackPostBody,
+                    fetch_json(f"{self.site_url}/api/v1/posts/{post['slug']}"),
+                )
+                content_html = body["body_html"] or ""
+            bylines = ", ".join(b["name"] for b in post.get("publishedBylines", []))
+            articles.append(
+                Article(
+                    guid=post["canonical_url"],
+                    title=post["title"],
+                    link=post["canonical_url"],
+                    author=bylines or default_author,
+                    pub_date=datetime.datetime.fromisoformat(post["post_date"]),
+                    content_html=content_html,
+                    audio=audio,
+                )
+            )
+        return articles
+
+
+def fetch_json(url: str) -> object:
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        response = cast(
+            http.client.HTTPResponse, urllib.request.urlopen(request, timeout=60)
+        )
+    except urllib.error.HTTPError as exc:
+        raise FeedFetchError(f"Request returned HTTP {exc.code} for {url}.") from exc
+    with response:
+        return cast(object, json.loads(response.read()))
+
+
+def fetch_articles(url: str, default_author: str) -> list[Article]:
     feed = feedparser.parse(url, agent=USER_AGENT)
 
     status = cast(int | None, getattr(feed, "status", None))
@@ -83,14 +167,18 @@ def fetch_articles(url: str = FEED_URL) -> list[Article]:
         if parsed:
             pub_date = datetime.datetime(*parsed[:6], tzinfo=datetime.UTC)
 
+        enclosures = cast(list[dict[str, str]], entry.get("enclosures", []))
+        audio = any(e.get("type", "").startswith("audio/") for e in enclosures)
+
         articles.append(
             Article(
                 guid=cast(str, entry.get("id", entry.get("link", ""))),
                 title=cast(str, entry.get("title", "")),
                 link=cast(str, entry.get("link", "")),
-                author=cast(str, entry.get("author", "Zvi Mowshowitz")),
+                author=cast(str, entry.get("author", default_author)),
                 pub_date=pub_date,
                 content_html=content_html,
+                audio=audio,
             )
         )
     return articles
@@ -106,7 +194,7 @@ def block_text(root: Tag) -> str:
     for tag in root.find_all(LINE_TAGS):
         _ = tag.insert_after("\n")
 
-    text = root.get_text().replace("\u200b", "")
+    text = root.get_text().replace("​", "")
     lines = (" ".join(line.split()) for line in text.split("\n"))
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 

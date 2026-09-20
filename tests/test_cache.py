@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from zvi_summaries.cache import CachedSummary, load_cache, save_cache
+from blog_summaries.cache import CachedSummary, load_cache, save_cache
 
 
 def make_summary(title: str = "Test Article") -> CachedSummary:
