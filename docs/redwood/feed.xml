@@ -6,7 +6,7 @@
     <atom:link href="https://martinmilbradt.de/blog-summaries/redwood/feed.xml" rel="self" type="application/rss+xml"/>
     <description>LLM-generated four-paragraph summaries of posts on the Redwood Research blog.</description>
     <language>en</language>
-    <lastBuildDate>Fri, 25 Sep 2026 11:09:55 +0000</lastBuildDate>
+    <lastBuildDate>Fri, 25 Sep 2026 16:33:29 +0000</lastBuildDate>
     <item>
       <title>Continual learning might make your blocking monitors nearly useless</title>
       <link>https://blog.redwoodresearch.org/p/continual-learning-might-make-your</link>
