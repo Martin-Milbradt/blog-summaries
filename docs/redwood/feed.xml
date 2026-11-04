@@ -6,7 +6,7 @@
     <atom:link href="https://martinmilbradt.de/blog-summaries/redwood/feed.xml" rel="self" type="application/rss+xml"/>
     <description>LLM-generated four-paragraph summaries of posts on the Redwood Research blog.</description>
     <language>en</language>
-    <lastBuildDate>Wed, 04 Nov 2026 13:47:25 +0000</lastBuildDate>
+    <lastBuildDate>Wed, 04 Nov 2026 23:12:06 +0000</lastBuildDate>
     <item>
       <title>OpenAI agents keep disabling monitoring; is this being handled appropriately?</title>
       <link>https://blog.redwoodresearch.org/p/openai-agents-keep-disabling-monitoring</link>
