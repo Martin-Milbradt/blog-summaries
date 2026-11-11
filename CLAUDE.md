@@ -27,6 +27,10 @@ Pipeline per blog: fetch the RSS feed -> filter uncached articles -> summarize v
 
 A model may refuse an article under its content policy. The run retries once on `FALLBACK_MODEL`, keeps going past articles both models refuse, and raises `RefusedArticlesError` only after every cache and feed is written, so a failure still commits the summaries that succeeded and still sends a workflow-failure notification.
 
+The prompt asks for a short version of the post in its authors' voice (same grammatical person, no "the author argues" framing), and the user message carries the byline so the model can name a co-author by first name where it has to. `dc:creator` reads `<authors> (summary by <model name>)`. The model name is OpenRouter's display name for the id the completion reports, so an alias like `~vendor/x-latest` is stored as the version that answered.
+
+Bylines: an RSS entry names one author. Substack lists every author in the archive API, so `fetch_feed_bylines()` reads them from there, only on runs with something new to summarize. A feed that credits an account handle gets full names from `BlogConfig.author_names`.
+
 Podcast episodes (an `audio/*` enclosure in RSS, `type == "podcast"` in the Substack API) are skipped: their body is show notes, not the content.
 
 Articles go to the model whole. `MAX_TEXT_LENGTH` in `fetch.py` only guards against a runaway payload; the longest posts reach about a quarter of it. The run log prints each article's character count. The text is light markdown: `#` headings, `1.` and `-` list markers, `>` on block quotes (the author's marker for quoted material, so the model can tell the author's words from quoted text), and an `[image]` placeholder where a figure was, so a sentence like "this chart shows" still points at something.
@@ -34,7 +38,7 @@ Articles go to the model whole. `MAX_TEXT_LENGTH` in `fetch.py` only guards agai
 ## Sources
 
 - `zvi`: Zvi Mowshowitz's blog via the WordPress mirror feed. The Substack feed sits behind a Cloudflare bot challenge that returns 403 to GitHub Actions runners. Older pages come from `?paged=N` on the same feed.
-- `redwood`: the Redwood Research blog via its Substack feed, which GitHub Actions can reach. Older pages come from the Substack archive API (`/api/v1/archive`, 20 posts per page) plus one `/api/v1/posts/<slug>` request per post for the body.
+- `redwood`: the Redwood Research blog via its Substack feed, which GitHub Actions can reach. Older pages come from the Substack archive API (`/api/v1/archive`, 20 posts per page, each response carrying a `nextCursor` for the page after it) plus one `/api/v1/posts/<slug>` request per post for the body.
 
 Bot protection is a per-publication Substack setting, so check a new Substack source from a runner before assuming either behavior.
 

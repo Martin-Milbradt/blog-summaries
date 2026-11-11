@@ -11,6 +11,9 @@ class CachedSummary(TypedDict):
     summary: str
     summarized_at: str
     model: NotRequired[str]
+    """Id of the model that wrote the summary."""
+    model_name: NotRequired[str]
+    """Its display name, e.g. "Claude Opus 4.1"."""
 
 
 def load_cache(path: Path) -> dict[str, CachedSummary]:

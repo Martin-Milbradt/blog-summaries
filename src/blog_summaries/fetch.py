@@ -1,4 +1,5 @@
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportMissingTypeStubs=false
+import collections.abc
 import dataclasses
 import datetime
 import http.client
@@ -6,6 +7,7 @@ import json
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Protocol, TypedDict, cast
 
@@ -18,7 +20,7 @@ USER_AGENT = (
 # Guard rail against a runaway feed payload, not a budget: the longest posts run
 # about 100k characters, so real articles never hit it.
 MAX_TEXT_LENGTH = 400_000
-# Substack feeds hold 20 entries, so archive page 2 starts where the feed ends.
+# Substack feeds hold 20 entries, so the first archive page lists the feed's posts.
 ARCHIVE_PAGE_SIZE = 20
 # Tags that end a paragraph: a blank line before and after.
 PARAGRAPH_TAGS = [
@@ -57,17 +59,31 @@ class Article:
 
 
 class Archive(Protocol):
-    """Posts older than the feed carries, one page at a time. Page 1 is the feed itself."""
+    """Posts older than the feed carries, and bylines the feed leaves out."""
 
-    def fetch_page(self, page: int, default_author: str) -> list[Article]: ...
+    def fetch_older_pages(
+        self, count: int, default_author: str
+    ) -> collections.abc.Iterator[list[Article]]:
+        """Up to `count` pages of posts, starting right after the feed's own."""
+        ...
+
+    def fetch_feed_bylines(self) -> dict[str, str]:
+        """Full byline per guid for the posts in the feed, where the feed's is partial."""
+        ...
 
 
 @dataclasses.dataclass(frozen=True)
 class WordPressArchive:
     feed_url: str
 
-    def fetch_page(self, page: int, default_author: str) -> list[Article]:
-        return fetch_articles(f"{self.feed_url}?paged={page}", default_author)
+    def fetch_older_pages(
+        self, count: int, default_author: str
+    ) -> collections.abc.Iterator[list[Article]]:
+        for page in range(2, count + 2):
+            yield fetch_articles(f"{self.feed_url}?paged={page}", default_author)
+
+    def fetch_feed_bylines(self) -> dict[str, str]:
+        return {}
 
 
 class SubstackByline(TypedDict):
@@ -83,42 +99,72 @@ class SubstackPost(TypedDict):
     publishedBylines: list[SubstackByline]
 
 
+class SubstackListing(TypedDict):
+    posts: list[SubstackPost]
+    nextCursor: str | None
+
+
 class SubstackPostBody(TypedDict):
     body_html: str | None
+
+
+def substack_byline(post: SubstackPost) -> str:
+    return ", ".join(b["name"] for b in post.get("publishedBylines", []))
 
 
 @dataclasses.dataclass(frozen=True)
 class SubstackArchive:
     site_url: str
 
-    def fetch_page(self, page: int, default_author: str) -> list[Article]:
-        offset = (page - 1) * ARCHIVE_PAGE_SIZE
-        listing_url = f"{self.site_url}/api/v1/archive?sort=new&offset={offset}&limit={ARCHIVE_PAGE_SIZE}"
-        posts = cast(list[SubstackPost], fetch_json(listing_url))
-        articles: list[Article] = []
-        for post in posts:
-            audio = post["type"] == "podcast"
-            content_html = ""
-            if not audio:
-                # The archive listing carries no bodies; each post is its own request.
-                body = cast(
-                    SubstackPostBody,
-                    fetch_json(f"{self.site_url}/api/v1/posts/{post['slug']}"),
-                )
-                content_html = body["body_html"] or ""
-            bylines = ", ".join(b["name"] for b in post.get("publishedBylines", []))
-            articles.append(
-                Article(
-                    guid=post["canonical_url"],
-                    title=post["title"],
-                    link=post["canonical_url"],
-                    author=bylines or default_author,
-                    pub_date=datetime.datetime.fromisoformat(post["post_date"]),
-                    content_html=content_html,
-                    audio=audio,
-                )
+    def fetch_listing(self, cursor: str | None) -> SubstackListing:
+        """One archive page, newest first. The first page matches the feed's posts."""
+        query = {"sort": "new", "limit": str(ARCHIVE_PAGE_SIZE)}
+        if cursor:
+            query["cursor"] = cursor
+        url = f"{self.site_url}/api/v1/archive?{urllib.parse.urlencode(query)}"
+        return cast(SubstackListing, fetch_json(url))
+
+    def fetch_feed_bylines(self) -> dict[str, str]:
+        # The RSS feed names only a post's first author.
+        posts = self.fetch_listing(None)["posts"]
+        return {
+            post["canonical_url"]: byline
+            for post in posts
+            if (byline := substack_byline(post))
+        }
+
+    def fetch_older_pages(
+        self, count: int, default_author: str
+    ) -> collections.abc.Iterator[list[Article]]:
+        cursor = self.fetch_listing(None).get("nextCursor")
+        for _ in range(count):
+            if not cursor:
+                return
+            listing = self.fetch_listing(cursor)
+            yield [
+                self.fetch_article(post, default_author) for post in listing["posts"]
+            ]
+            cursor = listing.get("nextCursor")
+
+    def fetch_article(self, post: SubstackPost, default_author: str) -> Article:
+        audio = post["type"] == "podcast"
+        content_html = ""
+        if not audio:
+            # The archive listing carries no bodies; each post is its own request.
+            body = cast(
+                SubstackPostBody,
+                fetch_json(f"{self.site_url}/api/v1/posts/{post['slug']}"),
             )
-        return articles
+            content_html = body["body_html"] or ""
+        return Article(
+            guid=post["canonical_url"],
+            title=post["title"],
+            link=post["canonical_url"],
+            author=substack_byline(post) or default_author,
+            pub_date=datetime.datetime.fromisoformat(post["post_date"]),
+            content_html=content_html,
+            audio=audio,
+        )
 
 
 def fetch_json(url: str) -> object:

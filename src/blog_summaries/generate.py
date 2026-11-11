@@ -43,7 +43,10 @@ def paragraphize(text: str) -> str:
 
 def format_item(guid: str, summary: CachedSummary) -> str:
     pub_dt = datetime.datetime.fromisoformat(summary["pub_date"])
-    creator = summary.get("model") or summary["author"]
+    creator = summary["author"]
+    model = summary.get("model_name") or summary.get("model")
+    if model:
+        creator = f"{creator} (summary by {model})"
     return ITEM_TEMPLATE.format(
         title=escape(summary["title"]),
         link=escape(summary["link"]),

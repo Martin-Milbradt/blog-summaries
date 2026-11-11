@@ -1,3 +1,4 @@
+import collections.abc
 import dataclasses
 
 from blog_summaries.fetch import Archive, SubstackArchive, WordPressArchive
@@ -20,6 +21,10 @@ class BlogConfig:
     prompt_subject: str
     """Completes "You summarize ..." in the system prompt."""
     feed_description: str
+    author_names: collections.abc.Mapping[str, str] = dataclasses.field(
+        default_factory=dict[str, str]
+    )
+    """Full name per feed byline, for feeds that credit an account handle."""
 
     @property
     def feed_title(self) -> str:
@@ -44,6 +49,7 @@ ZVI = BlogConfig(
     feed_description=(
         "LLM-generated four-paragraph summaries of Zvi Mowshowitz's blog posts."
     ),
+    author_names={"TheZvi": "Zvi Mowshowitz"},
 )
 
 REDWOOD = BlogConfig(

@@ -12,6 +12,7 @@ from blog_summaries.summarize import (
     ArticleRefusedError,
     configured_fallback_model,
     configured_model,
+    model_display_name,
     summarize_with_fallback,
 )
 
@@ -35,8 +36,8 @@ def fetch_pages(blog: BlogConfig, pages: int) -> list[Article]:
     """Articles from the feed, plus older archive pages so gaps stay recoverable."""
     articles = fetch_articles(blog.feed_url, blog.default_author)
     seen = {a.guid for a in articles}
-    for page in range(2, pages + 1):
-        for article in blog.archive.fetch_page(page, blog.default_author):
+    for page in blog.archive.fetch_older_pages(pages - 1, blog.default_author):
+        for article in page:
             if article.guid not in seen:
                 seen.add(article.guid)
                 articles.append(article)
@@ -56,6 +57,10 @@ def run_blog(
     cache = load_cache(cache_file)
     articles = fetch_pages(blog, pages)
 
+    # Fetched only when something is new, so a quiet run needs the feed alone.
+    pending = any(a.guid not in cache and not a.audio for a in articles)
+    bylines = blog.archive.fetch_feed_bylines() if pending else {}
+
     new_count = 0
     refused: list[str] = []
     for article in articles:
@@ -65,13 +70,17 @@ def run_blog(
             print(f"Skipping podcast: {article.title}")  # noqa: T201
             continue
 
+        author = bylines.get(article.guid, article.author)
+        author = blog.author_names.get(author, author)
         text = strip_html(article.content_html)
-        print(f"Summarizing: {article.title} ({len(text):,} chars)")  # noqa: T201
+        print(  # noqa: T201
+            f"Summarizing: {article.title} by {author} ({len(text):,} chars)"
+        )
         # Refusals must not abort the run: the remaining articles are still
         # summarizable, and the feed only recovers if they get written.
         try:
-            summary, used_model = summarize_with_fallback(
-                article.title, text, blog.prompt_subject, model, fallback
+            completion = summarize_with_fallback(
+                article.title, author, text, blog.prompt_subject, model, fallback
             )
         except ArticleRefusedError as exc:
             print(f"  REFUSED: {exc}")  # noqa: T201
@@ -81,11 +90,12 @@ def run_blog(
         cache[article.guid] = CachedSummary(
             title=article.title,
             link=article.link,
-            author=article.author,
+            author=author,
             pub_date=article.pub_date.isoformat(),
-            summary=summary,
+            summary=completion.content,
             summarized_at=datetime.datetime.now(datetime.UTC).isoformat(),
-            model=used_model,
+            model=completion.model,
+            model_name=model_display_name(completion.model),
         )
         new_count += 1
 

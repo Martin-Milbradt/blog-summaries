@@ -29,8 +29,8 @@ def test_fetch_articles_marks_audio_enclosures_and_fills_missing_author() -> Non
     assert (essay.audio, essay.author) == (False, "Fallback Author")
 
 
-def test_substack_archive_fetches_bodies_except_for_podcasts() -> None:
-    listing = [
+def test_substack_archive_follows_cursor_and_skips_podcast_bodies() -> None:
+    posts = [
         {
             "slug": "essay",
             "title": "Essay",
@@ -52,13 +52,17 @@ def test_substack_archive_fetches_bodies_except_for_podcasts() -> None:
     def fake_fetch_json(url: str) -> object:
         if url.endswith("/api/v1/posts/essay"):
             return {"body_html": "<p>Body.</p>"}
-        assert "/api/v1/archive?sort=new&offset=20&limit=20" in url
-        return listing
+        if url.endswith("/api/v1/archive?sort=new&limit=20"):
+            return {"posts": [], "nextCursor": "abc"}
+        assert url.endswith("/api/v1/archive?sort=new&limit=20&cursor=abc")
+        return {"posts": posts, "nextCursor": None}
 
+    archive = SubstackArchive("https://example.com")
     with patch("blog_summaries.fetch.fetch_json", side_effect=fake_fetch_json) as fetch:
-        essay, episode = SubstackArchive("https://example.com").fetch_page(2, "Blog")
+        # Three pages requested, but the cursor runs out after one.
+        [[essay, episode]] = list(archive.fetch_older_pages(3, "Blog"))
 
-    assert fetch.call_count == 2
+    assert fetch.call_count == 3
     assert (essay.guid, essay.author, essay.content_html) == (
         "https://example.com/p/essay",
         "A, B",
@@ -66,6 +70,22 @@ def test_substack_archive_fetches_bodies_except_for_podcasts() -> None:
     )
     assert essay.pub_date.isoformat() == "2026-09-11T17:12:25+00:00"
     assert (episode.audio, episode.author, episode.content_html) == (True, "Blog", "")
+
+
+def test_substack_feed_bylines_list_every_author() -> None:
+    listing = {
+        "posts": [
+            {
+                "canonical_url": "https://example.com/p/essay",
+                "publishedBylines": [{"name": "A One"}, {"name": "B Two"}],
+            },
+            {"canonical_url": "https://example.com/p/unsigned", "publishedBylines": []},
+        ],
+        "nextCursor": None,
+    }
+    with patch("blog_summaries.fetch.fetch_json", return_value=listing):
+        bylines = SubstackArchive("https://example.com").fetch_feed_bylines()
+    assert bylines == {"https://example.com/p/essay": "A One, B Two"}
 
 
 def test_strip_html_basic() -> None:

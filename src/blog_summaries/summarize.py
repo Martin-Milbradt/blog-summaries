@@ -1,11 +1,16 @@
 import collections.abc
 import dataclasses
 import datetime
+import functools
+import http.client
+import json
 import os
+import urllib.request
+from typing import TypedDict, cast
 
 import openai
 
-DEFAULT_KNOWLEDGE_CUTOFF = "January 2026"
+DEFAULT_KNOWLEDGE_CUTOFF = "June 2026"
 MAX_OUTPUT_TOKENS = 5000
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -46,9 +51,27 @@ def configured_knowledge_cutoff() -> str:
 
 
 SYSTEM_PROMPT_TEMPLATE = """\
-You summarize {subject}.
-Write exactly four paragraphs of plain prose: no bullet points, headers, or editorializing beyond what the author wrote.
-Your knowledge cutoff is {knowledge_cutoff} and today is {today}; the article may cover events after your cutoff, so trust its account over your priors."""
+You write the entries of an RSS feed that condenses {subject}. Subscribers read your entry in place of the post, or to decide whether the full post is worth their time. So it should carry what the post actually says: its main claims, the reasoning and evidence behind them, and its conclusions.
+
+Voice: write a short version of the post in its authors' own voice, not a report about the post. Keep the grammatical person the post uses: where it says "I think" or "we found", so do you. State the content directly. Framing such as "the author argues", "the post concludes" or "this piece lists" only reminds readers that they are reading a summary, which they know, and costs words that could carry content. For example, write "Labs should publish their escalation rules", not "The author argues that labs should publish their escalation rules". Because you are speaking for the authors, stay with what they say and the stance they take, and add no assessment of your own.
+
+Names: the user message says who wrote the post. Sometimes an author has to be mentioned in the third person, for instance when co-authors wrote separate sections or disagree with each other. Use their first name then, never "the author". If the post does not make clear which co-author a passage belongs to, write "the authors", or simply keep the post's "we".
+
+Format: exactly four paragraphs of plain prose, separated by blank lines. The feed shows your text as written, so markdown, headings and bullet points would appear as literal characters. The reader already sees the post's title, so begin with the content itself.
+
+The post arrives as light markdown. Lines starting with ">" are material the authors quote from someone else, so attribute those views by name to the person quoted and keep them distinct from the authors' own. "[image]" marks where a figure stood. You cannot see it, so rely on what the surrounding text says about it.
+
+Your knowledge cutoff is {knowledge_cutoff} and today is {today}. The post may cover events, models and people from after your cutoff, so trust its account over your priors."""
+
+USER_PROMPT_TEMPLATE = """\
+Title: {title}
+Written by: {author}
+
+<post>
+{text}
+</post>
+
+Write the feed entry for this post."""
 
 
 def system_prompt(subject: str) -> str:
@@ -63,6 +86,23 @@ def system_prompt(subject: str) -> str:
 class ChatMessage:
     role: str
     content: str
+
+
+@dataclasses.dataclass(frozen=True)
+class Completion:
+    content: str
+    model: str
+    """Id of the model that answered, which resolves an alias like `~vendor/x-latest`."""
+
+
+class OpenRouterModel(TypedDict):
+    id: str
+    name: str
+    canonical_slug: str
+
+
+class OpenRouterModels(TypedDict):
+    data: list[OpenRouterModel]
 
 
 class MissingOpenRouterKeyError(Exception):
@@ -90,7 +130,9 @@ def serialize_messages(
     return [{"role": m.role, "content": m.content} for m in messages]
 
 
-def post_chat(messages: collections.abc.Sequence[ChatMessage], model: str) -> str:
+def post_chat(
+    messages: collections.abc.Sequence[ChatMessage], model: str
+) -> Completion:
     api_key = environment_api_key()
     client = openai.OpenAI(
         base_url=OPENROUTER_BASE_URL,
@@ -118,37 +160,61 @@ def post_chat(messages: collections.abc.Sequence[ChatMessage], model: str) -> st
     content = choice.message.content
     if not content:
         raise OpenRouterRequestError("OpenRouter response contained empty content.")
-    return content
+    return Completion(content=content, model=response.model)
+
+
+@functools.cache
+def fetch_model_names() -> dict[str, str]:
+    """OpenRouter's display name per model id, e.g. "Anthropic: Claude Opus 4.1"."""
+    response = cast(
+        http.client.HTTPResponse,
+        urllib.request.urlopen(f"{OPENROUTER_BASE_URL}/models", timeout=60),
+    )
+    with response:
+        models = cast(OpenRouterModels, json.loads(response.read()))["data"]
+    names = {model["id"]: model["name"] for model in models}
+    # A completion may report the dated slug instead of the listed id.
+    for model in models:
+        _ = names.setdefault(model["canonical_slug"], model["name"])
+    return names
+
+
+def model_display_name(model: str) -> str:
+    """Readable name for a model id, without the vendor prefix. Unlisted ids pass through."""
+    return fetch_model_names().get(model, model).split(": ", 1)[-1]
 
 
 def summarize_with_fallback(
     title: str,
+    author: str,
     text: str,
     subject: str,
     model: str,
     fallback: str | None,
-) -> tuple[str, str]:
+) -> Completion:
     """Summarize, retrying a refusal once on the fallback model.
 
-    Returns the summary and the model that produced it. Raises ArticleRefusedError
-    if there is no usable fallback or if the fallback refuses too.
+    Raises ArticleRefusedError if there is no usable fallback or if the fallback
+    refuses too.
     """
     try:
-        return summarize_article(title, text, subject, model), model
+        return summarize_article(title, author, text, subject, model)
     except ArticleRefusedError:
         if not fallback or fallback == model:
             raise
         print(f"  refused by {model}, retrying with {fallback}")  # noqa: T201
 
-    return summarize_article(title, text, subject, fallback), fallback
+    return summarize_article(title, author, text, subject, fallback)
 
 
-def summarize_article(title: str, text: str, subject: str, model: str) -> str:
+def summarize_article(
+    title: str, author: str, text: str, subject: str, model: str
+) -> Completion:
     messages = [
         ChatMessage(role="system", content=system_prompt(subject)),
         ChatMessage(
             role="user",
-            content=f"Summarize this article.\n\nTitle: {title}\n\nContent:\n{text}",
+            content=USER_PROMPT_TEMPLATE.format(title=title, author=author, text=text),
         ),
     ]
     return post_chat(messages, model)
