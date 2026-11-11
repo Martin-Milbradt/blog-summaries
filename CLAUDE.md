@@ -2,6 +2,8 @@
 
 RSS feeds of LLM-generated four-paragraph summaries, one feed per source blog. Blogs are declared in `blogs.py` as `BlogConfig` entries; everything else is shared.
 
+**ALWAYS run `git pull` before starting any work.** The scheduled workflow commits to `main` every six hours, so a local clone is almost always behind, and `data/` and `docs/` are stale until pulled.
+
 ## Commands
 
 ```bash
